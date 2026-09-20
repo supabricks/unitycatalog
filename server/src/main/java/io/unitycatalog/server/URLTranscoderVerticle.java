@@ -63,6 +63,7 @@ class URLTranscoderVerticle extends AbstractVerticle {
 
     server.listen(
         transcodePort,
+        "127.0.0.1",
         ar -> {
           if (ar.succeeded()) {
             LOGGER.info("URL transcoder started on port {}", transcodePort);
