@@ -11,6 +11,7 @@ import io.unitycatalog.server.persist.dao.FunctionParameterInfoDAO;
 import io.unitycatalog.server.persist.dao.MetastoreDAO;
 import io.unitycatalog.server.persist.dao.ModelVersionInfoDAO;
 import io.unitycatalog.server.persist.dao.PropertyDAO;
+import io.unitycatalog.server.persist.dao.PublicationIdentityDAO;
 import io.unitycatalog.server.persist.dao.RegisteredModelInfoDAO;
 import io.unitycatalog.server.persist.dao.SchemaInfoDAO;
 import io.unitycatalog.server.persist.dao.StagingTableDAO;
@@ -67,6 +68,7 @@ public class HibernateConfigurator {
       configuration.addAnnotatedClass(CatalogInfoDAO.class);
       configuration.addAnnotatedClass(SchemaInfoDAO.class);
       configuration.addAnnotatedClass(TableInfoDAO.class);
+      configuration.addAnnotatedClass(PublicationIdentityDAO.class);
       configuration.addAnnotatedClass(StagingTableDAO.class);
       configuration.addAnnotatedClass(ColumnInfoDAO.class);
       configuration.addAnnotatedClass(PropertyDAO.class);

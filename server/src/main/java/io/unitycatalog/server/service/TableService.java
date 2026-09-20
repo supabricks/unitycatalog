@@ -25,6 +25,8 @@ import io.unitycatalog.server.persist.TableRepository;
 import io.unitycatalog.server.persist.dao.TableInfoDAO;
 import io.unitycatalog.server.utils.ServerProperties;
 import java.util.Optional;
+import java.util.UUID;
+import com.linecorp.armeria.server.annotation.Header;
 import com.linecorp.armeria.common.HttpResponse;
 import com.linecorp.armeria.common.HttpStatus;
 import com.linecorp.armeria.server.annotation.Delete;
@@ -86,12 +88,14 @@ public class TableService extends AuthorizedService {
         @AuthorizeResourceKey(value = EXTERNAL_LOCATION, key = "storage_location")
       })
       @AuthorizeKey(key = "table_type")
-      CreateTable createTable) {
+      CreateTable createTable,
+      @Header("X-Supabricks-Table-Id") Optional<String> requestedId) {
     assert createTable != null;
     serverProperties.checkDeltaApiOnlyForManagedTable(
         createTable.getTableType(),
         "POST /delta/v1/catalogs/{catalog}/schemas/{schema}/tables");
-    TableInfo tableInfo = tableRepository.createTable(createTable);
+    TableInfo tableInfo =
+        tableRepository.createTableWithId(createTable, requestedId.map(UUID::fromString));
 
     SchemaInfo schemaInfo =
         schemaRepository.getSchema(tableInfo.getCatalogName() + "." + tableInfo.getSchemaName());
@@ -144,8 +148,11 @@ public class TableService extends AuthorizedService {
   @Delete("/{full_name}")
   @AuthorizeExpression(AuthorizeExpressions.DELETE_TABLE)
   public HttpResponse deleteTable(
-      @Param("full_name") @AuthorizeResourceKey(TABLE) String fullName) {
-    TableInfoDAO deleted = tableRepository.deleteTable(fullName);
+      @Param("full_name") @AuthorizeResourceKey(TABLE) String fullName,
+      @Header("X-Supabricks-Table-Id") Optional<String> expectedId) {
+    TableInfoDAO deleted = expectedId.isPresent()
+        ? tableRepository.deleteTableIfId(fullName, UUID.fromString(expectedId.get()))
+        : tableRepository.deleteTable(fullName);
     removeHierarchicalAuthorizations(deleted.getId().toString(), deleted.getSchemaId().toString());
     return HttpResponse.of(HttpStatus.OK);
   }
