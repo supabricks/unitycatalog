@@ -22,6 +22,7 @@ import io.unitycatalog.server.model.TableType;
 import io.unitycatalog.server.persist.dao.ColumnInfoDAO;
 import io.unitycatalog.server.persist.dao.DependencyDAO;
 import io.unitycatalog.server.persist.dao.PropertyDAO;
+import io.unitycatalog.server.persist.dao.PublicationIdentityDAO;
 import io.unitycatalog.server.persist.dao.SchemaInfoDAO;
 import io.unitycatalog.server.persist.dao.StagingTableDAO;
 import io.unitycatalog.server.persist.dao.TableInfoDAO;
@@ -578,7 +579,18 @@ public class TableRepository {
   }
 
   public TableInfo createTable(CreateTable createTable) {
-    return createTableImpl(createTable, Optional.empty(), (session, dao, tableInfo) -> tableInfo);
+    return createTableWithId(createTable, Optional.empty());
+  }
+
+  /** Supabricks publication identity, persisted atomically with an external Delta table. */
+  public TableInfo createTableWithId(CreateTable request, Optional<UUID> requestedId) {
+    ValidationUtils.checkArgument(
+        requestedId.isEmpty()
+            || (request.getTableType() == TableType.EXTERNAL
+                && request.getDataSourceFormat() == DataSourceFormat.DELTA),
+        "Caller-assigned IDs require external Delta tables");
+    return createTableImpl(
+        request, Optional.empty(), requestedId, (session, dao, tableInfo) -> tableInfo);
   }
 
   /**
@@ -597,6 +609,7 @@ public class TableRepository {
     return createTableImpl(
         createTable,
         uniformFields,
+        Optional.empty(),
         (session, dao, tableInfo) ->
             buildLoadTableResponse(
                 session,
@@ -618,6 +631,7 @@ public class TableRepository {
   private <T> T createTableImpl(
       CreateTable createTable,
       Optional<DeltaUniformUtils.UniformIcebergFields> uniformFields,
+      Optional<UUID> requestedId,
       CreateResultMapper<T> mapper) {
     ValidationUtils.validateSqlObjectName(createTable.getName());
     String callerId = IdentityUtils.findPrincipalEmailAddress();
@@ -651,6 +665,14 @@ public class TableRepository {
             throw new BaseException(
                 ErrorCode.TABLE_ALREADY_EXISTS, "Table already exists: " + fullName);
           }
+          if (requestedId.isPresent()) {
+            UUID id = requestedId.get();
+            if (session.get(PublicationIdentityDAO.class, id) != null) {
+              throw new BaseException(
+                  ErrorCode.TABLE_ALREADY_EXISTS, "Publication UUID already used");
+            }
+            session.persist(new PublicationIdentityDAO(id));
+          }
           TableType tableType = Objects.requireNonNull(createTable.getTableType());
           // `tableUUID` is the table's primary key. The shape is uniform across the three
           // creatable branches (external, managed, metric view); the only divergence is the
@@ -665,7 +687,7 @@ public class TableRepository {
                 "External table storage location must include a non-empty path prefix: %s",
                 createTable.getStorageLocation());
             ExternalLocationUtils.validateNotOverlapWithManagedStorage(session, storageLocation);
-            tableUUID = UUID.randomUUID();
+            tableUUID = requestedId.orElseGet(UUID::randomUUID);
           } else if (tableType == TableType.MANAGED) {
             storageLocation = NormalizedURL.from(createTable.getStorageLocation());
             serverProperties.checkManagedTableEnabled();
@@ -948,6 +970,28 @@ public class TableRepository {
         },
         "Failed to delete table",
         /* readOnly = */ false);
+  }
+
+  /** Identity comparison and metadata deletion share the same database transaction. */
+  public TableInfoDAO deleteTableIfId(String fullName, UUID expectedId) {
+    String[] parts = fullName.split("\\.");
+    ValidationUtils.checkArgument(parts.length == 3, "Invalid table name");
+    return TransactionManager.executeWithTransaction(
+        sessionFactory,
+        session -> {
+          UUID schemaId =
+              repositories.getSchemaRepository().getSchemaIdOrThrow(session, parts[0], parts[1]);
+          TableInfoDAO table = findBySchemaIdAndName(session, schemaId, parts[2]);
+          if (table == null) throw new BaseException(ErrorCode.TABLE_NOT_FOUND, "Table not found");
+          session.refresh(table, org.hibernate.LockMode.PESSIMISTIC_WRITE);
+          ValidationUtils.checkArgument(
+              table.getId().equals(expectedId)
+                  && TableType.EXTERNAL.getValue().equals(table.getType()),
+              "Table identity/type changed; deletion refused");
+          return deleteTable(session, schemaId, parts[2]);
+        },
+        "Failed conditional table deletion",
+        false);
   }
 
   TableInfoDAO deleteTable(Session session, UUID schemaId, String tableName) {
