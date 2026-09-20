@@ -5,9 +5,12 @@ import static io.unitycatalog.server.security.SecurityContext.Issuers.INTERNAL;
 import com.auth0.jwk.Jwk;
 import com.auth0.jwk.JwkProvider;
 import com.auth0.jwk.JwkProviderBuilder;
+import com.auth0.jwk.NetworkException;
+import com.auth0.jwk.SigningKeyNotFoundException;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linecorp.armeria.client.WebClient;
@@ -39,7 +42,17 @@ public class JwksOperations {
   @SneakyThrows
   public JWTVerifier verifierForIssuerAndKey(String issuer, String keyId, String alg) {
     JwkProvider jwkProvider = loadJwkProvider(issuer);
-    Jwk jwk = jwkProvider.get(keyId);
+    Jwk jwk;
+    try {
+      jwk = jwkProvider.get(keyId);
+    } catch (SigningKeyNotFoundException e) {
+      // A rotated/unknown key is an invalid credential, not a server failure.
+      // Keep transport and other provider failures on their existing error path.
+      if (e instanceof NetworkException) {
+        throw e;
+      }
+      throw new JWTVerificationException("Token signing key is not recognized");
+    }
 
     Algorithm algorithm = algorithmForJwk(jwk, alg);
 
@@ -126,4 +139,3 @@ public class JwksOperations {
     }
   }
 }
-

@@ -74,6 +74,21 @@ public class AuthServiceTest extends BaseAuthCRUDTest {
     assertThat(response.status()).isEqualTo(HttpStatus.UNAUTHORIZED);
   }
 
+  @Test
+  public void testRetiredSigningKeyIsRejectedAsUnauthenticated() {
+    String token =
+        JWT.create()
+            .withIssuer(INTERNAL)
+            .withSubject("admin")
+            .withKeyId("retired-signing-key")
+            .withClaim(JwtClaim.TOKEN_TYPE.key(), JwtTokenType.SERVICE.name())
+            .sign(securityContext.getAlgorithm());
+    AggregatedHttpResponse response =
+        client.execute(buildLogoutRequestHeaderWithToken(token)).aggregate().join();
+    assertThat(response.status()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    assertThat(response.contentUtf8()).doesNotContain(token, "retired-signing-key");
+  }
+
   private RequestHeaders buildLogoutRequestHeader(boolean includeCookie) {
     RequestHeadersBuilder builder =
         RequestHeaders.builder()
