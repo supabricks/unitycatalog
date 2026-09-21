@@ -52,6 +52,63 @@ public class PermissionServiceTest extends SdkAccessControlBaseCRUDTest {
 
   @Test
   @SneakyThrows
+  public void conditionalGrantRejectsRecreatedObjectsAndPrincipals() {
+    var user = createTestUser("fenced@example.test");
+    var catalogs = new io.unitycatalog.client.api.CatalogsApi(adminApiClient);
+    String objectId = catalogs.getCatalog(CATALOG_NAME).getId();
+    var client =
+        com.linecorp.armeria.client.WebClient.builder(adminConfig.getServerUrl())
+            .auth(com.linecorp.armeria.common.auth.AuthToken.ofOAuth2(adminConfig.getAuthToken()))
+            .build();
+    String path = "/api/2.1/unity-catalog/permissions/catalog/" + CATALOG_NAME;
+    String body =
+        "{\"changes\":[{\"principal\":\"fenced@example.test\",\"add\":[\"USE CATALOG\"],\"remove\":[]}]}";
+    for (var ids :
+        java.util.List.of(
+            java.util.List.of(java.util.UUID.randomUUID().toString(), user.getId()),
+            java.util.List.of(objectId, java.util.UUID.randomUUID().toString()),
+            java.util.List.of(objectId, "invalid"))) {
+      var headers =
+          com.linecorp.armeria.common.RequestHeaders.builder(
+                  com.linecorp.armeria.common.HttpMethod.PATCH, path)
+              .contentType(com.linecorp.armeria.common.MediaType.JSON)
+              .set("X-Supabricks-Object-Id", ids.get(0))
+              .set("X-Supabricks-Principal-Id", ids.get(1))
+              .build();
+      var response =
+          client
+              .execute(headers, com.linecorp.armeria.common.HttpData.ofUtf8(body))
+              .aggregate()
+              .join();
+      assertThat(response.status().isSuccess()).isFalse();
+      assertThat(
+              privilegesFor(
+                  grantsApi.get(SecurableType.CATALOG, CATALOG_NAME, null), "fenced@example.test"))
+          .isEmpty();
+    }
+    var headers =
+        com.linecorp.armeria.common.RequestHeaders.builder(
+                com.linecorp.armeria.common.HttpMethod.PATCH, path)
+            .contentType(com.linecorp.armeria.common.MediaType.JSON)
+            .set("X-Supabricks-Object-Id", objectId)
+            .set("X-Supabricks-Principal-Id", user.getId())
+            .build();
+    assertThat(
+            client
+                .execute(headers, com.linecorp.armeria.common.HttpData.ofUtf8(body))
+                .aggregate()
+                .join()
+                .status()
+                .isSuccess())
+        .isTrue();
+    assertThat(
+            privilegesFor(
+                grantsApi.get(SecurableType.CATALOG, CATALOG_NAME, null), "fenced@example.test"))
+        .containsExactly(Privilege.USE_CATALOG);
+  }
+
+  @Test
+  @SneakyThrows
   public void testPermissionsServiceUseCases() {
     // Grants are scoped to a single securable, so we exercise the catalog, schema and table levels
     // independently and then read each one back. The base test only creates the catalog and schema,
