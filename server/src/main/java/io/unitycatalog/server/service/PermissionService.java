@@ -45,6 +45,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import com.linecorp.armeria.common.HttpResponse;
+import com.linecorp.armeria.server.ServiceRequestContext;
 import com.linecorp.armeria.server.annotation.ExceptionHandler;
 import com.linecorp.armeria.server.annotation.Get;
 import com.linecorp.armeria.server.annotation.Param;
@@ -299,12 +300,31 @@ public class PermissionService {
       SecurableType securableType, String name, UpdatePermissions request) {
     UUID resourceId = getResourceId(securableType, name);
     List<PermissionsChange> changes = request.getChanges();
+    // Private-broker conditional grant extension. Resolve names once, validate
+    // the expected incarnations, then mutate only those resolved UUIDs.
+    var headers = ServiceRequestContext.current().request().headers();
+    String expectedObject = headers.get("X-Supabricks-Object-Id");
+    String expectedPrincipal = headers.get("X-Supabricks-Principal-Id");
+    boolean fenced = expectedObject != null || expectedPrincipal != null;
+    if (fenced
+        && (expectedObject == null
+            || expectedPrincipal == null
+            || headers.getAll("X-Supabricks-Object-Id").size() != 1
+            || headers.getAll("X-Supabricks-Principal-Id").size() != 1
+            || changes.size() != 1
+            || !resourceId.toString().equals(expectedObject))) {
+      throw new BaseException(ErrorCode.FAILED_PRECONDITION, "Grant object identity changed");
+    }
     Set<UUID> principalIds = new HashSet<>();
     changes.forEach(
         change -> {
           String principal = change.getPrincipal();
           User user = userRepository.getUserByEmail(principal);
           UUID principalId = UUID.fromString(Objects.requireNonNull(user.getId()));
+          if (fenced && !principalId.toString().equals(expectedPrincipal)) {
+            throw new BaseException(
+                ErrorCode.FAILED_PRECONDITION, "Grant principal identity changed");
+          }
           principalIds.add(principalId);
           change
               .getAdd()
